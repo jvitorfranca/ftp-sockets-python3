@@ -119,6 +119,24 @@ class ClientFTP:
 
                 progress.update(len(bytes_read))
 
+    def chdir(self, pathname):
+
+        '''
+            Change the current working directory .
+        '''
+
+        try:
+            self.socket.send("CD".encode())
+
+        except:
+            print(
+                "Couldn't make server request. Make sure a connection has bene established. \n")
+    
+        self.socket.send(struct.pack("i", len(pathname.encode())))
+
+        self.socket.send(pathname.encode())
+
+
     def quit(self):
         '''
             Send quit requisition and wait for confirmation
@@ -168,6 +186,14 @@ if __name__ == "__main__":
             print("")
 
             client.upload(filename)
+        
+        elif command.upper() == "CD":
+
+            filename = input('\nInsert pathname: ')
+
+            print("")
+
+            client.chdir(filename)
 
         elif command.upper() == "QUIT":
 

@@ -117,6 +117,28 @@ class ServerFTP:
 
         print('Upload Successful\n')
 
+    def chdir(self):
+        
+        '''
+            Change the current working directory .
+        '''
+        
+        str_size = struct.unpack("i", self.conn.recv(4))[0]
+
+        pathname = self.conn.recv(str_size)
+
+        print(pathname)
+
+        pathname = pathname.decode()
+
+        # trying to change directory 
+        try: 
+            os.chdir(pathname) 
+            print("Inserting inside-", os.getcwd()) 
+        # Caching the exception     
+        except: 
+            print("Something wrong with specified directory. Exception- ", sys.exc_info())
+
     def quit(self):
         ''' Send quit confirmation and restart server.
         '''
@@ -158,6 +180,10 @@ if __name__ == "__main__":
         elif data == "UP":
 
             server.upload()
+
+        elif data == "CD":
+
+            server.chdir()    
 
         elif data == "QUIT":
 
