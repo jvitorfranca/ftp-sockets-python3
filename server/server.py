@@ -3,9 +3,9 @@ import os
 import sys
 import tqdm
 import struct
+import time
 
-
-class ServerFTP:
+class ServerFTP():
     def __init__(self, ip, port, buffer=1024):
 
         self.__ip = ip
@@ -16,6 +16,11 @@ class ServerFTP:
         self.conn = None
         self.addr = None
 
+        self.data_address = None
+        self.datasock = None
+
+        self.mode = 'I'
+    
     def bind(self):
         '''
             Wait a client's connection.
@@ -34,6 +39,18 @@ class ServerFTP:
 
         return self.conn.recv(self.__buffer)
 
+    def pwd(self):
+        '''
+            1. Get list of files in directory
+            2. Send over the number of files, so the client knows what to expect
+            3. Send over the file names and sizes whilst totaling the directory size
+        '''
+        path = os.getcwd()
+        
+        self.conn.send(('257 \"%s\" is current directory.\r\n' % path).encode() )
+        
+        print("Successfully sent file listing \n")
+
     def list_files(self):
         '''
             1. Get list of files in directory
@@ -41,108 +58,161 @@ class ServerFTP:
             3. Send over the file names and sizes whilst totaling the directory size
         '''
 
-        send = ""
+        self.conn.send('150 Here comes the directory listing.\r\n'.encode())
+        self.datasock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.datasock.connect(self.data_address)
 
-        path = os.getcwd()
+        l=os.listdir('.')
+        
+        for t in l:
+            k=self.to_list_item(t)
+            self.datasock.send(k.encode())
+            
+        self.datasock.close()
+        self.datasock = None
+        self.conn.send('226 Directory send OK.\r\n'.encode())
 
-        dirs = os.listdir(path)
+    def to_list_item(self,fn):
+        st=os.stat(fn)
+        fullmode='rwxrwxrwx'
+        mode=''
+        for i in range(9):
+            mode+=((st.st_mode>>(8-i))&1) and fullmode[i] or '-'
+        d=(os.path.isdir(fn)) and 'd' or '-'
+        ftime=time.strftime(' %b %d %H:%M ', time.gmtime(st.st_mtime))
+        return d+mode+' 1 user group '+str(st.st_size)+ftime+os.path.basename(fn)+'\r\n'
 
-        for f in dirs:
-            send = send + f + ' '
+    def port(self, data):
+        
+        cmd_addr = data.split(" ")
+        cmd_ip_port = cmd_addr[1].split(",")
 
-        self.conn.send(send.encode())
+        ip = ".".join(str(x) for x in cmd_ip_port[0:4])
+        port = cmd_ip_port[-2:]
+        port =  int(port[0])*256 + int(port[1])
+        
+        server.data_address = (ip, port)
 
-        print("Successfully sent file listing \n")
+        send = '200  Port command successfull.\r\n'
+        server.conn.send(send.encode())    
 
-    def download(self):
+    def download(self,data):
         '''
             Send file in batches with the buffer size
         '''
-
-        filename = self.conn.recv(1024)
+        filename = data.split(" ")[1]
+        
+        print('Download file... ',filename)
 
         filesize = os.path.getsize(filename)
 
         progress = tqdm.tqdm(range(
-            filesize), f"Sending {filename.decode()}", unit="B", unit_scale=True, unit_divisor=1024)
+            filesize), f"Sending {filename}", unit="B", unit_scale=True, unit_divisor=1024)
 
-        self.conn.send(struct.pack("i", filesize))
+        self.conn.send('150 Opening data connection.\r\n'.encode())
+        
+        self.datasock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.datasock.connect(self.data_address)
 
-        with open(filename, "rb") as f:
+        readmode = 'rb' if  self.mode == 'I' else 'r'
+
+        # self.conn.send(struct.pack("i", filesize))
+
+        with open(filename, readmode) as f:
 
             for _ in progress:
 
                 bytes_read = f.read(self.__buffer)
 
                 if not bytes_read:
-
                     break
-
-                self.conn.sendall(bytes_read)
-
+                # self.conn.sendall(bytes_read)
+                self.datasock.send(bytes_read)
                 progress.update(len(bytes_read))
 
-    def upload(self):
+        self.datasock.close()
+        self.conn.send('226 Transfer complete.\r\n'.encode())
+
+    def upload(self, data):
         '''
             Receive a file from client and save it in chunks
         '''
 
-        str_size = struct.unpack("i", self.conn.recv(4))[0]
+        # str_size = struct.unpack("i", self.conn.recv(4))[0]
 
-        filename = self.conn.recv(str_size)
+        # filename = self.conn.recv(str_size)
+        filename = data.split(" ")[1]
+        
+        print('Upload file... ',filename)
 
-        print(filename)
+        self.conn.send('150 Opening data connection.\r\n'.encode())
 
-        filename = filename.decode()
+        self.datasock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.datasock.connect(self.data_address)
 
-        with open(filename, 'wb') as f:
+        readmode = 'wb' if  self.mode == 'I' else 'w'
 
-            print('Starting upload \n')
 
-            bytes_recieved = 0
-
-            size = struct.unpack("i", self.conn.recv(4))[0]
-
+        with open(filename, readmode) as f:
+            
             while True:
+                bytes_recieved = self.datasock.recv(self.__buffer)
+                
+                if not bytes_recieved: break
 
-                data = self.conn.recv(self.__buffer)
-
-                f.write(data)
-
-                bytes_recieved += self.__buffer
-
-                if bytes_recieved >= size:
-
-                    break
+                f.write(bytes_recieved)
+        
+        
+        self.datasock.close()
+        self.conn.send('226 Transfer complete.\r\n'.encode())
 
         print('Upload Successful\n')
 
-    def chdir(self):
-        
+    def chdir(self, data):
         '''
             Change the current working directory .
         '''
-        
-        str_size = struct.unpack("i", self.conn.recv(4))[0]
+        pathname = data.split(" ")[1]
 
-        pathname = self.conn.recv(str_size)
-
-        print(pathname)
-
-        pathname = pathname.decode()
-
-        # trying to change directory 
         try: 
             os.chdir(pathname) 
-            print("Inserting inside-", os.getcwd()) 
+            print("The current directory is", os.getcwd()) 
+            self.conn.send(('250 \"%s\" is current directory.\r\n' % os.getcwd()).encode() )
+
         # Caching the exception     
         except: 
             print("Something wrong with specified directory. Exception- ", sys.exc_info())
+            self.conn.send(('550 \"%s\" Requested action not taken. File unavailable.\r\n').encode() )
+
+    def welcome_message(self):
+        send = '220 connection started.\r\n'
+        self.conn.send(send.encode())
+    
+    def _type(self,data):
+        self.mode = data.split(" ")[1]
+        send = '200 funcioned.\r\n'
+        self.conn.send(send.encode())
+
+    def pasv(self):
+        send = '227 passive mode activated.\r\n'
+        self.conn.send(send.encode())
+
+    def abor(self):
+        send = '225 abor command.\r\n'
+        self.conn.send(send.encode())    
+    
+    def user(self, data):
+        u = data.split(" ")[1]
+        self.conn.send(('331 OK - {}.\r\n'.format(u)).encode())
+
+    def _pass(self, data):
+        # p = data.split(" ")[1] #password 
+        self.conn.send('230 OK.\r\n'.encode())
 
     def quit(self):
         ''' Send quit confirmation and restart server.
         '''
-        self.conn.send("1".encode())
+        self.conn.send('221 Goodbye.\r\n'.encode())
         self.conn.close()
         self.socket.close()
 
@@ -151,44 +221,64 @@ class ServerFTP:
 
 if __name__ == "__main__":
 
-    server = ServerFTP('127.0.0.1', 2350)
-
+    server = ServerFTP('127.0.0.1', 2330)
+   
     print('FTP Server \n')
-
+    print('This FTP server only works in passive mode\n')
     print('Binding... \n')
-
+    
     server.bind()
-
+    server.welcome_message()
+   
     while True:
+      
 
         print("Waiting instructions \n")
 
         data = server.receive()
+        
+        if not data: break
 
         data = data.decode()
-
+       
         print("Received instruction: {0}\n".format(data))
 
-        if data == "LIST":
+        data_arr = data.split('\r\n')[:-1]
 
-            server.list_files()
+        for i in range(0,len(data_arr)):
+            
+            data = data_arr[i]
 
-        elif data == "DOWN":
+            if  data == "PWD" :
+                server.pwd()
+            elif data == "LIST" : 
+                server.list_files()
+            elif "PORT" in data:
+                server.port(data)
+            elif "CWD" in data:
+                server.chdir(data) 
+            elif "USER" in data:
+                server.user(data)
+            elif "PASS" in data:
+                server._pass(data) 
+            elif  "TYPE" in data:
+                server._type(data)
+            elif  "RETR" in data:
+                server.download(data)
+            elif "STOR" in data:  
+                server.upload(data)
+            elif  "ABOR" in data:
+                server.abor()        
+            elif data == 'PASV':
+                server.pasv()
+           
 
-            server.download()
+            elif data == "QUIT":
 
-        elif data == "UP":
+                server.quit()
+                break
+            else: 
+                send = '220 starting connection funcioned tunino.\r\n'
+                server.conn.send(send.encode())
 
-            server.upload()
-
-        elif data == "CD":
-
-            server.chdir()    
-
-        elif data == "QUIT":
-
-            server.quit()
-
-            break
-
-        data = None
+            data = None
