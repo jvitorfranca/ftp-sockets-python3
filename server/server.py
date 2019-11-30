@@ -5,6 +5,8 @@ import tqdm
 import struct
 import time
 
+
+
 class ServerFTP():
     def __init__(self, ip, port, buffer=1024):
 
@@ -62,7 +64,7 @@ class ServerFTP():
         self.datasock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         self.datasock.connect(self.data_address)
 
-        l=os.listdir('.')
+        l = os.listdir('.')
         
         for t in l:
             k=self.to_list_item(t)
@@ -104,7 +106,11 @@ class ServerFTP():
         
         print('Download file... ',filename)
 
-        filesize = os.path.getsize(filename)
+        try:
+            filesize = os.path.getsize(filename)
+        except: 
+            self.conn.send(("550 can't access file '{}'.\r\n").format(filename).encode())
+            return
 
         progress = tqdm.tqdm(range(
             filesize), f"Sending {filename}", unit="B", unit_scale=True, unit_divisor=1024)
@@ -117,21 +123,25 @@ class ServerFTP():
         readmode = 'rb' if  self.mode == 'I' else 'r'
 
         # self.conn.send(struct.pack("i", filesize))
+        try: 
+            with open(filename, readmode) as f:
 
-        with open(filename, readmode) as f:
+                for _ in progress:
 
-            for _ in progress:
+                    bytes_read = f.read(self.__buffer)
 
-                bytes_read = f.read(self.__buffer)
+                    if not bytes_read:
+                        break
+                    # self.conn.sendall(bytes_read)
+                    self.datasock.send(bytes_read)
+                    progress.update(len(bytes_read))
 
-                if not bytes_read:
-                    break
-                # self.conn.sendall(bytes_read)
-                self.datasock.send(bytes_read)
-                progress.update(len(bytes_read))
-
+            self.conn.send('226 Transfer complete.\r\n'.encode())        
+        except:
+            self.conn.send("550 can't access file: Permission denied.\r\n".encode())
+        
         self.datasock.close()
-        self.conn.send('226 Transfer complete.\r\n'.encode())
+        
 
     def upload(self, data):
         '''
@@ -152,20 +162,22 @@ class ServerFTP():
 
         readmode = 'wb' if  self.mode == 'I' else 'w'
 
-
-        with open(filename, readmode) as f:
-            
-            while True:
-                bytes_recieved = self.datasock.recv(self.__buffer)
+        try:
+            with open(filename, readmode) as f:
                 
-                if not bytes_recieved: break
+                while True:
+                    bytes_recieved = self.datasock.recv(self.__buffer)
+                    
+                    if not bytes_recieved: break
 
-                f.write(bytes_recieved)
-        
+                    f.write(bytes_recieved)
+
+            self.conn.send('226 Transfer complete.\r\n'.encode())        
+        except:
+            self.conn.send("550 can't access file .\r\n".encode())
         
         self.datasock.close()
-        self.conn.send('226 Transfer complete.\r\n'.encode())
-
+    
         print('Upload Successful\n')
 
     def chdir(self, data):
@@ -182,7 +194,7 @@ class ServerFTP():
         # Caching the exception     
         except: 
             print("Something wrong with specified directory. Exception- ", sys.exc_info())
-            self.conn.send(('550 \"%s\" Requested action not taken. File unavailable.\r\n').encode() )
+            self.conn.send(('550 \"{}\" Requested action not taken. File unavailable.\r\n'.format(os.getcwd()+"/"+str(pathname))).encode() )
 
     def welcome_message(self):
         send = '220 connection started.\r\n'
@@ -220,19 +232,24 @@ class ServerFTP():
 
 
 if __name__ == "__main__":
+    # FTP SERVER SETUP
+    
+    IP = '127.0.0.1'
+    PORT = 2330
 
-    server = ServerFTP('127.0.0.1', 2330)
-   
-    print('FTP Server \n')
+    server = ServerFTP(IP, PORT)
+    
+    print('FTP Server - {}:{} \n'.format( IP, PORT))
     print('This FTP server only works in passive mode\n')
     print('Binding... \n')
     
     server.bind()
-    server.welcome_message()
    
+    server.welcome_message()
+        
     while True:
       
-
+        
         print("Waiting instructions \n")
 
         data = server.receive()
