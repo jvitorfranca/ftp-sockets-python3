@@ -7,11 +7,11 @@ Run: `python server/server.py`
 
 ### Commands available
 
-LIST - list files in current directory
-RETR - download files from server
-STOR - upload files to server
-CWD - change directory
-PWD - show current directory
+1. LIST - list files in current directory
+2. RETR - download files from server
+3. STOR - upload files to server
+4. CWD - change directory
+5. PWD - show current directory
 
 
 ### Using command-line ftp client
